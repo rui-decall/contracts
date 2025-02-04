@@ -31,12 +31,19 @@ describe("Booking", function () {
   });
 
   describe("Booking Creation", function () {
-    it("Should create a new booking", async function () {
+    it("Should create a new booking and transfer ETH", async function () {
       const { booking, buyer, seller, bookingId, bookingAmount } = await loadFixture(deployBookingFixture);
 
-      await expect(booking.connect(buyer).book(seller.address, bookingAmount, bookingId))
+      const contractBalanceBefore = await ethers.provider.getBalance(await booking.getAddress());
+
+      await expect(booking.connect(buyer).book(seller.address, bookingAmount, bookingId, {
+        value: bookingAmount
+      }))
         .to.emit(booking, "Booked")
         .withArgs(buyer.address, seller.address, bookingAmount, bookingId);
+
+      const contractBalanceAfter = await ethers.provider.getBalance(await booking.getAddress());
+      expect(contractBalanceAfter - contractBalanceBefore).to.equal(bookingAmount);
 
       const bookingDetails = await booking.bookings(bookingId);
       expect(bookingDetails.buyer).to.equal(buyer.address);
@@ -45,10 +52,32 @@ describe("Booking", function () {
       expect(bookingDetails.exists).to.be.true;
     });
 
+    it("Should not allow booking with incorrect ETH amount", async function () {
+      const { booking, buyer, seller, bookingId, bookingAmount } = await loadFixture(deployBookingFixture);
+      
+      await expect(
+        booking.connect(buyer).book(seller.address, bookingAmount, bookingId, {
+          value: bookingAmount - 1n
+        })
+      ).to.be.revertedWith("Sent ETH must match booking amount");
+    });
+
+    it("Should not allow booking with zero address seller", async function () {
+      const { booking, buyer, bookingId, bookingAmount } = await loadFixture(deployBookingFixture);
+      
+      await expect(
+        booking.connect(buyer).book(ethers.ZeroAddress, bookingAmount, bookingId, {
+          value: bookingAmount
+        })
+      ).to.be.revertedWith("Invalid seller address");
+    });
+
     it("Should not allow duplicate booking IDs", async function () {
       const { booking, buyer, seller, bookingId, bookingAmount } = await loadFixture(deployBookingFixture);
       
-      await booking.connect(buyer).book(seller.address, bookingAmount, bookingId);
+      await booking.connect(buyer).book(seller.address, bookingAmount, bookingId, {
+        value: bookingAmount
+      });
       
       await expect(
         booking.connect(buyer).book(seller.address, bookingAmount, bookingId)
@@ -89,17 +118,26 @@ describe("Booking", function () {
       const baseFixture = await deployBookingFixture();
       const { booking, buyer, seller, bookingId, bookingAmount } = baseFixture;
       
-      await booking.connect(buyer).book(seller.address, bookingAmount, bookingId);
+      await booking.connect(buyer).book(seller.address, bookingAmount, bookingId, {
+        value: bookingAmount
+      });
       
       return { ...baseFixture };
     }
 
-    it("Should allow buyer to cancel within cancellation period", async function () {
+    it("Should allow buyer to cancel within cancellation period and return ETH", async function () {
       const { booking, buyer, seller, bookingId, bookingAmount } = await loadFixture(deployAndCreateBookingFixture);
 
-      await expect(booking.connect(buyer).cancelBooking(bookingId))
-        .to.emit(booking, "Cancelled")
-        .withArgs(buyer.address, seller.address, bookingAmount, bookingId);
+      const buyerBalanceBefore = await ethers.provider.getBalance(buyer.address);
+
+      const tx = await booking.connect(buyer).cancelBooking(bookingId);
+      const receipt = await tx.wait();
+      const gasUsed = receipt!.gasUsed * receipt!.gasPrice;
+
+      const buyerBalanceAfter = await ethers.provider.getBalance(buyer.address);
+      
+      // Account for gas costs in the balance check
+      expect(buyerBalanceAfter + gasUsed - buyerBalanceBefore).to.equal(bookingAmount);
 
       const bookingDetails = await booking.bookings(bookingId);
       expect(bookingDetails.exists).to.be.false;

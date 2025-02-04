@@ -3,11 +3,12 @@ pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 // Uncomment this line to use console.log
 // import "hardhat/console.sol";
 
-contract Booking is Initializable, OwnableUpgradeable {
+contract Booking is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable {
     uint256 public cancellationPeriod;
     
     struct BookingDetails {
@@ -30,11 +31,14 @@ contract Booking is Initializable, OwnableUpgradeable {
 
     function initialize() public initializer {
         __Ownable_init(msg.sender);
+        __ReentrancyGuard_init();
         cancellationPeriod = 30 minutes;
     }
 
-    function book(address seller, uint256 amount, string memory bookingId) public {
+    function book(address seller, uint256 amount, string memory bookingId) public payable nonReentrant {
         require(!bookings[bookingId].exists, "Booking ID already exists");
+        require(msg.value == amount, "Sent ETH must match booking amount");
+        require(seller != address(0), "Invalid seller address");
         
         bookings[bookingId] = BookingDetails({
             buyer: msg.sender,
@@ -43,6 +47,7 @@ contract Booking is Initializable, OwnableUpgradeable {
             bookingTime: block.timestamp,
             exists: true
         });
+        
         emit Booked(msg.sender, seller, amount, bookingId);
     }
 
@@ -51,7 +56,7 @@ contract Booking is Initializable, OwnableUpgradeable {
         cancellationPeriod = newPeriod;
     }
 
-    function cancelBooking(string memory bookingId) public {
+    function cancelBooking(string memory bookingId) public nonReentrant {
         BookingDetails storage booking = bookings[bookingId];
         
         require(booking.exists, "Booking does not exist");
@@ -63,6 +68,11 @@ contract Booking is Initializable, OwnableUpgradeable {
         
         uint256 amount = booking.amount;
         address seller = booking.seller;
+        
+        // Transfer the ETH back from seller to buyer
+        (bool success, ) = msg.sender.call{value: amount}("");
+        require(success, "ETH transfer failed");
+        
         delete bookings[bookingId];
         
         emit Cancelled(msg.sender, seller, amount, bookingId);
